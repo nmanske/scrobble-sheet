@@ -99,6 +99,62 @@ type lastfmError struct {
 	Text string `xml:",chardata"`
 }
 
+type trackInfoResponse struct {
+	XMLName xml.Name     `xml:"lfm"`
+	Status  string       `xml:"status,attr"`
+	Error   *lastfmError `xml:"error"`
+	Track   trackInfoXML `xml:"track"`
+}
+
+type trackInfoXML struct {
+	Name   string          `xml:"name"`
+	Artist trackInfoArtist `xml:"artist"`
+	Album  trackInfoAlbum  `xml:"album"`
+}
+
+type trackInfoArtist struct {
+	Name string `xml:"name"`
+}
+
+type trackInfoAlbum struct {
+	Artist   string `xml:"artist"`
+	Title    string `xml:"title"`
+	Position int    `xml:"position,attr"`
+}
+
+func (c *Client) ResolveTrackPosition(ctx context.Context, artist, trackName string) (albumArtist string, albumTitle string, position int, err error) {
+	artist = strings.TrimSpace(artist)
+	trackName = strings.TrimSpace(trackName)
+	if artist == "" || trackName == "" {
+		return "", "", 0, fmt.Errorf("resolve track position: missing artist or track name")
+	}
+
+	params := url.Values{}
+	params.Set("method", "track.getInfo")
+	params.Set("api_key", c.apiKey)
+	params.Set("autocorrect", "1")
+	params.Set("artist", artist)
+	params.Set("track", trackName)
+
+	body, err := c.request(ctx, params)
+	if err != nil {
+		return "", "", 0, err
+	}
+
+	var resp trackInfoResponse
+	if err := xml.Unmarshal(body, &resp); err != nil {
+		return "", "", 0, fmt.Errorf("parse track.getInfo response: %w", err)
+	}
+	if strings.EqualFold(resp.Status, "failed") || resp.Error != nil {
+		if resp.Error != nil {
+			return "", "", 0, fmt.Errorf("last.fm track.getInfo error %d: %s", resp.Error.Code, strings.TrimSpace(resp.Error.Text))
+		}
+		return "", "", 0, fmt.Errorf("last.fm track.getInfo failed")
+	}
+
+	return strings.TrimSpace(resp.Track.Album.Artist), strings.TrimSpace(resp.Track.Album.Title), resp.Track.Album.Position, nil
+}
+
 func NewClient(apiKey, username, cacheDir, userAgent string, delay time.Duration, httpClient *http.Client) *Client {
 	return &Client{
 		apiKey:    apiKey,
@@ -166,58 +222,94 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 		return cached, nil
 	}
 
-	params := url.Values{}
-	params.Set("method", "album.getInfo")
-	params.Set("api_key", c.apiKey)
-	params.Set("autocorrect", "1")
-	if strings.TrimSpace(mbid) != "" {
-		params.Set("mbid", strings.TrimSpace(mbid))
-	} else {
+	// Prefer artist+album first. For this project, album-name matching is usually
+	// more stable than MBID because Last.fm can sometimes resolve MBIDs to odd
+	// release variants with incomplete or mismatched tracklists.
+	tryParams := []url.Values{}
+
+	artist = strings.TrimSpace(artist)
+	album = strings.TrimSpace(album)
+	mbid = strings.TrimSpace(mbid)
+
+	if artist != "" && album != "" {
+		params := url.Values{}
+		params.Set("method", "album.getInfo")
+		params.Set("api_key", c.apiKey)
+		params.Set("autocorrect", "1")
 		params.Set("artist", artist)
 		params.Set("album", album)
+		tryParams = append(tryParams, params)
 	}
 
-	body, err := c.request(ctx, params)
-	if err != nil {
-		return model.AlbumMetadata{}, err
-	}
-	var resp albumInfoResponse
-	if err := xml.Unmarshal(body, &resp); err != nil {
-		return model.AlbumMetadata{}, fmt.Errorf("parse album.getInfo response: %w", err)
-	}
-	if strings.EqualFold(resp.Status, "failed") || resp.Error != nil {
-		if resp.Error != nil {
-			return model.AlbumMetadata{}, fmt.Errorf("last.fm album.getInfo error %d: %s", resp.Error.Code, strings.TrimSpace(resp.Error.Text))
-		}
-		return model.AlbumMetadata{}, fmt.Errorf("last.fm album.getInfo failed")
+	if mbid != "" {
+		params := url.Values{}
+		params.Set("method", "album.getInfo")
+		params.Set("api_key", c.apiKey)
+		params.Set("autocorrect", "1")
+		params.Set("mbid", mbid)
+		tryParams = append(tryParams, params)
 	}
 
-	meta := model.AlbumMetadata{
-		Artist:       strings.TrimSpace(resp.Album.Artist),
-		Album:        strings.TrimSpace(resp.Album.Name),
-		MBID:         strings.TrimSpace(resp.Album.MBID),
-		ReleaseDate:  strings.TrimSpace(resp.Album.ReleaseDate),
-		Year:         extractYear(resp.Album.ReleaseDate),
-		SourceArtist: artist,
-		SourceAlbum:  album,
+	if len(tryParams) == 0 {
+		return model.AlbumMetadata{}, fmt.Errorf("resolve album: missing artist/album and mbid")
 	}
-	for _, tr := range resp.Album.Tracks.Tracks {
-		name := strings.TrimSpace(tr.Name)
-		rank := tr.Rank
-		if name == "" || rank <= 0 {
+
+	var lastErr error
+	for _, params := range tryParams {
+		body, err := c.request(ctx, params)
+		if err != nil {
+			lastErr = err
 			continue
 		}
-		meta.Tracks = append(meta.Tracks, model.AlbumTrack{Rank: rank, Name: name})
+
+		var resp albumInfoResponse
+		if err := xml.Unmarshal(body, &resp); err != nil {
+			lastErr = fmt.Errorf("parse album.getInfo response: %w", err)
+			continue
+		}
+		if strings.EqualFold(resp.Status, "failed") || resp.Error != nil {
+			if resp.Error != nil {
+				lastErr = fmt.Errorf("last.fm album.getInfo error %d: %s", resp.Error.Code, strings.TrimSpace(resp.Error.Text))
+			} else {
+				lastErr = fmt.Errorf("last.fm album.getInfo failed")
+			}
+			continue
+		}
+
+		meta := model.AlbumMetadata{
+			Artist:       strings.TrimSpace(resp.Album.Artist),
+			Album:        strings.TrimSpace(resp.Album.Name),
+			MBID:         strings.TrimSpace(resp.Album.MBID),
+			ReleaseDate:  strings.TrimSpace(resp.Album.ReleaseDate),
+			Year:         extractYear(resp.Album.ReleaseDate),
+			SourceArtist: artist,
+			SourceAlbum:  album,
+		}
+		for _, tr := range resp.Album.Tracks.Tracks {
+			name := strings.TrimSpace(tr.Name)
+			rank := tr.Rank
+			if name == "" || rank <= 0 {
+				continue
+			}
+			meta.Tracks = append(meta.Tracks, model.AlbumTrack{Rank: rank, Name: name})
+		}
+		sort.Slice(meta.Tracks, func(i, j int) bool { return meta.Tracks[i].Rank < meta.Tracks[j].Rank })
+
+		if meta.Artist == "" {
+			meta.Artist = artist
+		}
+		if meta.Album == "" {
+			meta.Album = album
+		}
+
+		_ = c.writeAlbumCache(key, meta)
+		return meta, nil
 	}
-	sort.Slice(meta.Tracks, func(i, j int) bool { return meta.Tracks[i].Rank < meta.Tracks[j].Rank })
-	if meta.Artist == "" {
-		meta.Artist = artist
+
+	if lastErr != nil {
+		return model.AlbumMetadata{}, lastErr
 	}
-	if meta.Album == "" {
-		meta.Album = album
-	}
-	_ = c.writeAlbumCache(key, meta)
-	return meta, nil
+	return model.AlbumMetadata{}, fmt.Errorf("last.fm album.getInfo failed")
 }
 
 func (c *Client) getRecentTracksPage(ctx context.Context, page, limit int, fromUnix, toUnix int64) (*recentTracksResponse, error) {
@@ -350,10 +442,13 @@ func extractYear(releaseDate string) string {
 }
 
 func albumCacheKey(artist, album, mbid string) string {
+	if strings.TrimSpace(artist) != "" || strings.TrimSpace(album) != "" {
+		return model.NormalizeKey(artist, album)
+	}
 	if strings.TrimSpace(mbid) != "" {
 		return "mbid:" + strings.TrimSpace(mbid)
 	}
-	return model.NormalizeKey(artist, album)
+	return "unknown"
 }
 
 func (c *Client) readAlbumCache(key string) (model.AlbumMetadata, bool) {

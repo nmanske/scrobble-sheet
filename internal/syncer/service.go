@@ -87,6 +87,7 @@ func (s *Service) runSync(ctx context.Context, opts model.RuntimeOptions) (Summa
 	if err != nil {
 		return Summary{}, err
 	}
+	s.seedStateFromTargetRows(&st, idx)
 
 	fromUnix, toUnix, err := s.computeSyncWindow(st, opts)
 	if err != nil {
@@ -134,17 +135,29 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 		return Summary{}, err
 	}
 
+	s.logger.Printf("backfill: fetching full Last.fm history...")
 	scrobbles, err := s.lastfm.FetchAllScrobbles(ctx)
 	if err != nil {
 		return Summary{}, err
 	}
+	s.logger.Printf("backfill: fetched %d scrobbles", len(scrobbles))
+
 	summary := Summary{}
-	for _, scrobble := range scrobbles {
+	for i, scrobble := range scrobbles {
 		if err := s.applyScrobble(ctx, &summary, idx, &st, scrobble); err != nil {
 			return summary, err
 		}
+
+		if i > 0 && i%500 == 0 {
+			s.logger.Printf("backfill: checkpoint at %d / %d", i, len(scrobbles))
+			if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
+				return summary, err
+			}
+		}
 	}
+
 	st.LastSuccessfulSyncUTC = time.Now().UTC().Format(time.RFC3339)
+	s.logger.Printf("backfill: persisting %d dirty row(s)", len(idx.dirtyRows()))
 	if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 		return summary, err
 	}
@@ -276,6 +289,10 @@ func (s *Service) loadSheetIndex(ctx context.Context, sheetName string) (*sheetI
 	return idx, nil
 }
 
+func looksLikeSingleRelease(trackName, albumName string) bool {
+	return model.NormalizeText(trackName) == model.NormalizeText(albumName)
+}
+
 func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *sheetIndex, st *model.State, scrobble model.Scrobble) error {
 	summary.ScrobblesProcessed++
 	if scrobble.NowPlaying || scrobble.Timestamp <= 0 || strings.TrimSpace(scrobble.Album) == "" {
@@ -356,15 +373,20 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 	}
 
 	trackCount := highestTrackRank(meta)
+
+	// if trackCount == 1 && looksLikeSingleRelease(scrobble.TrackName, canonicalAlbum) {
+	// 	summary.ScrobblesSkipped++
+	// 	s.logger.Printf(
+	// 		"skipping likely single: artist=%q album=%q track=%q",
+	// 		canonicalArtist,
+	// 		canonicalAlbum,
+	// 		scrobble.TrackName,
+	// 	)
+	// 	return nil
+	// }
+
 	if trackCount == 0 {
 		summary.TracklistFallbacks++
-		if strings.TrimSpace(row.DateListened) == "" && strings.TrimSpace(row.Notes) == "" && len(albumState.HeardRanks) == 0 {
-			row.DateListened = s.formatDate(albumState.FirstScrobbleUnix)
-			row.Notes = ""
-			row.Dirty = true
-			albumState.Completed = true
-			summary.AlbumsCompleted++
-		}
 		albumState.TrackCount = 0
 		(*st).Albums[chosenKey] = albumState
 		return nil
@@ -372,9 +394,42 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 
 	heard := albumState.HeardSet()
 	matchedRank, matched := matchTrackToRank(scrobble.TrackName, meta, heard)
+
+	if !matched {
+		fallbackArtist, fallbackAlbum, fallbackPos, fallbackErr := s.lastfm.ResolveTrackPosition(ctx, scrobble.Artist, scrobble.TrackName)
+		if fallbackErr == nil &&
+			fallbackPos > 0 &&
+			model.NormalizeText(fallbackArtist) == model.NormalizeText(canonicalArtist) &&
+			model.NormalizeText(fallbackAlbum) == model.NormalizeText(canonicalAlbum) &&
+			fallbackPos <= trackCount {
+
+			matchedRank = fallbackPos
+			matched = true
+			s.logger.Printf(
+				"track position fallback matched: artist=%q album=%q track=%q rank=%d",
+				canonicalArtist, canonicalAlbum, scrobble.TrackName, matchedRank,
+			)
+		} else {
+			s.logger.Printf(
+				"warning: unmatched scrobble track artist=%q album=%q track=%q resolved_artist=%q resolved_album=%q track_count=%d fallback_artist=%q fallback_album=%q fallback_pos=%d fallback_err=%v",
+				scrobble.Artist,
+				scrobble.Album,
+				scrobble.TrackName,
+				canonicalArtist,
+				canonicalAlbum,
+				trackCount,
+				fallbackArtist,
+				fallbackAlbum,
+				fallbackPos,
+				fallbackErr,
+			)
+		}
+	}
+
 	if matched {
 		heard[matchedRank] = true
 	}
+
 	albumState.SetHeardSet(heard)
 	albumState.TrackCount = trackCount
 
@@ -409,6 +464,15 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 		(*st).Albums[rawKey] = albumState
 	}
 	return nil
+}
+
+func (s *Service) seedStateFromTargetRows(st *model.State, idx *sheetIndex) {
+	for _, row := range idx.rows {
+		if row == nil || row.Key == "" {
+			continue
+		}
+		upsertStateFromRow(st, row.Key, row, s.loc)
+	}
 }
 
 func (s *Service) persist(ctx context.Context, idx *sheetIndex, st model.State, dryRun bool) error {
