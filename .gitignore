@@ -1,0 +1,6 @@
+/bin/
+/data/
+/secrets/
+.env
+*.zip
+lastfm-sheet-sync

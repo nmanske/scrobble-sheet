@@ -1,0 +1,2 @@
+# Run from the project root at 2:15 AM daily.
+15 2 * * * cd /opt/lastfm-sheet-sync && docker compose run --rm lastfm-sheet-sync sync >> ./logs/sync.log 2>&1

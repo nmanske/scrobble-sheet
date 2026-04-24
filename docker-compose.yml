@@ -1,0 +1,12 @@
+services:
+  lastfm-sheet-sync:
+    build: .
+    image: lastfm-sheet-sync:local
+    env_file:
+      - .env
+    volumes:
+      - ./secrets:/app/secrets:ro
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    working_dir: /app
+    command: ["sync"]
