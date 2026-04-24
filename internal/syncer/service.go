@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -619,27 +620,68 @@ func highestTrackRank(meta model.AlbumMetadata) int {
 	return maxRank
 }
 
-func matchTrackToRank(trackName string, meta model.AlbumMetadata, heard map[int]bool) (int, bool) {
-	normalized := model.NormalizeText(trackName)
-	if normalized == "" {
+func normalizeTrackName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	// Replace common unicode punctuation with spaces or nothing.
+	replacer := strings.NewReplacer(
+		"’", "'",
+		"`", "'",
+		"“", "\"",
+		"”", "\"",
+		"–", "-",
+		"—", "-",
+		"&", "and",
+	)
+	s = replacer.Replace(s)
+
+	// Remove parenthetical/bracketed suffixes like:
+	// (feat. Shiro), [Remix], (Live), etc.
+	reParen := regexp.MustCompile(`\([^)]*\)`)
+	s = reParen.ReplaceAllString(s, " ")
+
+	reBracket := regexp.MustCompile(`\[[^\]]*\]`)
+	s = reBracket.ReplaceAllString(s, " ")
+
+	// Remove trailing "feat/ft/with ..." even if not parenthesized.
+	reFeat := regexp.MustCompile(`(?i)\b(feat\.?|ft\.?|with)\b.*$`)
+	s = reFeat.ReplaceAllString(s, " ")
+
+	// Remove punctuation except letters/numbers/spaces.
+	rePunct := regexp.MustCompile(`[^a-z0-9\s]`)
+	s = rePunct.ReplaceAllString(s, " ")
+
+	// Collapse whitespace.
+	s = strings.Join(strings.Fields(s), " ")
+
+	return s
+}
+
+func matchTrackToRank(name string, meta model.AlbumMetadata, heard map[int]bool) (int, bool) {
+	target := normalizeTrackName(name)
+	if target == "" {
 		return 0, false
 	}
-	matches := make([]int, 0, 2)
-	for _, track := range meta.Tracks {
-		if model.NormalizeText(track.Name) == normalized {
-			matches = append(matches, track.Rank)
+
+	// Exact normalized match first.
+	for _, tr := range meta.Tracks {
+		if normalizeTrackName(tr.Name) == target {
+			return tr.Rank, true
 		}
 	}
-	if len(matches) == 0 {
-		return 0, false
-	}
-	sort.Ints(matches)
-	for _, rank := range matches {
-		if !heard[rank] {
-			return rank, true
+
+	// Then a looser containment fallback.
+	for _, tr := range meta.Tracks {
+		norm := normalizeTrackName(tr.Name)
+		if norm == "" {
+			continue
+		}
+		if strings.Contains(norm, target) || strings.Contains(target, norm) {
+			return tr.Rank, true
 		}
 	}
-	return matches[0], true
+
+	return 0, false
 }
 
 func lowestMissingTrack(heard map[int]bool, totalTracks int) int {
