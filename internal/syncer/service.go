@@ -569,14 +569,12 @@ func rowToSheetRow(rowNumber int, row []string) *model.SheetRow {
 	padded := make([]string, model.SheetColumnCount)
 	copy(padded, row)
 	return &model.SheetRow{
-		RowNumber:         rowNumber,
-		DateListened:      strings.TrimSpace(padded[0]),
-		Artist:            strings.TrimSpace(padded[1]),
-		Album:             strings.TrimSpace(padded[2]),
-		Year:              strings.TrimSpace(padded[3]),
-		LiveMusicLocation: strings.TrimSpace(padded[4]),
-		Download:          strings.TrimSpace(padded[5]),
-		Notes:             strings.TrimSpace(padded[6]),
+		RowNumber:    rowNumber,
+		DateListened: strings.TrimSpace(padded[0]),
+		Artist:       strings.TrimSpace(padded[1]),
+		Album:        strings.TrimSpace(padded[2]),
+		Year:         strings.TrimSpace(padded[3]),
+		Notes:        strings.TrimSpace(padded[4]),
 	}
 }
 
@@ -596,12 +594,6 @@ func betterLegacyRow(existing, candidate *model.SheetRow, loc *time.Location) *m
 	if out.Year == "" && candidate.Year != "" {
 		out.Year = candidate.Year
 	}
-	if out.LiveMusicLocation == "" && candidate.LiveMusicLocation != "" {
-		out.LiveMusicLocation = candidate.LiveMusicLocation
-	}
-	if out.Download == "" && candidate.Download != "" {
-		out.Download = candidate.Download
-	}
 	if numericNote(candidate.Notes) > numericNote(out.Notes) {
 		out.Notes = candidate.Notes
 	}
@@ -612,8 +604,6 @@ func mergeIntoTargetRow(target, candidate *model.SheetRow, loc *time.Location) b
 	original := target.Clone()
 
 	target.Year = firstNonEmpty(target.Year, candidate.Year)
-	target.LiveMusicLocation = firstNonEmpty(target.LiveMusicLocation, candidate.LiveMusicLocation)
-	target.Download = firstNonEmpty(target.Download, candidate.Download)
 
 	targetDate, targetOK := parseFlexibleDate(target.DateListened, loc)
 	candidateDate, candOK := parseFlexibleDate(candidate.DateListened, loc)
@@ -632,8 +622,6 @@ func mergeIntoTargetRow(target, candidate *model.SheetRow, loc *time.Location) b
 
 	changed := target.DateListened != original.DateListened ||
 		target.Year != original.Year ||
-		target.LiveMusicLocation != original.LiveMusicLocation ||
-		target.Download != original.Download ||
 		target.Notes != original.Notes
 	if changed {
 		target.Dirty = true

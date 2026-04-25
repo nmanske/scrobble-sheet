@@ -15,10 +15,8 @@ const (
 	ArtistHeader            = "Artist"
 	AlbumHeader             = "Album"
 	YearHeader              = "Year"
-	LiveHeader              = "Live Music Location"
-	DownloadHeader          = "Download"
 	NotesHeader             = "Notes"
-	SheetColumnCount        = 7
+	SheetColumnCount        = 5
 )
 
 type Config struct {
@@ -87,21 +85,19 @@ type AlbumMetadata struct {
 }
 
 type SheetRow struct {
-	Key               string
-	RowNumber         int
-	DateListened      string
-	Artist            string
-	Album             string
-	Year              string
-	LiveMusicLocation string
-	Download          string
-	Notes             string
-	Dirty             bool
-	Existing          bool
+	Key          string
+	RowNumber    int
+	DateListened string
+	Artist       string
+	Album        string
+	Year         string
+	Notes        string
+	Dirty        bool
+	Existing     bool
 }
 
 func (r *SheetRow) ToValues() []interface{} {
-	return []interface{}{r.DateListened, r.Artist, r.Album, r.Year, r.LiveMusicLocation, r.Download, r.Notes}
+	return []interface{}{r.DateListened, r.Artist, r.Album, r.Year, r.Notes}
 }
 
 func (r *SheetRow) Clone() *SheetRow {
@@ -155,7 +151,7 @@ func (s *State) EnsureDefaults() {
 }
 
 func Headers() []interface{} {
-	return []interface{}{DateHeader, ArtistHeader, AlbumHeader, YearHeader, LiveHeader, DownloadHeader, NotesHeader}
+	return []interface{}{DateHeader, ArtistHeader, AlbumHeader, YearHeader, NotesHeader}
 }
 
 func NormalizeKey(artist, album string) string {
