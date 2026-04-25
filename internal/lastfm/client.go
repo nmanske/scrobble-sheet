@@ -224,7 +224,7 @@ func (c *Client) FetchAllScrobbles(ctx context.Context) ([]model.Scrobble, error
 func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (model.AlbumMetadata, error) {
 	key := albumCacheKey(artist, album, mbid)
 	if cached, ok := c.readAlbumCache(key); ok {
-		if (cached.Year == "" || len(cached.Tracks) == 0) && cached.MBID != "" {
+		if cached.MBID != "" && (cached.Year == "" || len(cached.Tracks) == 0 || cached.ReleaseGroupType == "") {
 			mb := c.fetchFromMusicBrainz(ctx, cached.MBID)
 			updated := false
 			if cached.Year == "" && mb.Year != "" {
@@ -233,6 +233,10 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			}
 			if len(cached.Tracks) == 0 && len(mb.Tracks) > 0 {
 				cached.Tracks = mb.Tracks
+				updated = true
+			}
+			if cached.ReleaseGroupType == "" && mb.ReleaseGroupType != "" {
+				cached.ReleaseGroupType = mb.ReleaseGroupType
 				updated = true
 			}
 			if updated {
@@ -322,13 +326,16 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			meta.Album = album
 		}
 
-		if (meta.Year == "" || len(meta.Tracks) == 0) && meta.MBID != "" {
+		if meta.MBID != "" && (meta.Year == "" || len(meta.Tracks) == 0 || meta.ReleaseGroupType == "") {
 			mb := c.fetchFromMusicBrainz(ctx, meta.MBID)
 			if meta.Year == "" && mb.Year != "" {
 				meta.Year = mb.Year
 			}
 			if len(meta.Tracks) == 0 && len(mb.Tracks) > 0 {
 				meta.Tracks = mb.Tracks
+			}
+			if meta.ReleaseGroupType == "" && mb.ReleaseGroupType != "" {
+				meta.ReleaseGroupType = mb.ReleaseGroupType
 			}
 		}
 		_ = c.writeAlbumCache(key, meta)
@@ -435,6 +442,7 @@ type mbReleaseResponse struct {
 
 type mbReleaseGroup struct {
 	FirstReleaseDate string `json:"first-release-date"`
+	PrimaryType      string `json:"primary-type"`
 }
 
 type mbMedium struct {
@@ -469,8 +477,9 @@ func (c *Client) waitMB(ctx context.Context) error {
 }
 
 type mbReleaseData struct {
-	Year   string
-	Tracks []model.AlbumTrack
+	Year             string
+	Tracks           []model.AlbumTrack
+	ReleaseGroupType string
 }
 
 func (c *Client) fetchFromMusicBrainz(ctx context.Context, mbid string) mbReleaseData {
@@ -501,8 +510,9 @@ func (c *Client) fetchFromMusicBrainz(ctx context.Context, mbid string) mbReleas
 		date = result.Date
 	}
 	return mbReleaseData{
-		Year:   extractYear(date),
-		Tracks: tracksFromMBMedia(result.Media),
+		Year:             extractYear(date),
+		Tracks:           tracksFromMBMedia(result.Media),
+		ReleaseGroupType: result.ReleaseGroup.PrimaryType,
 	}
 }
 

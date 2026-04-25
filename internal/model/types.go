@@ -10,6 +10,7 @@ import (
 const (
 	DefaultTargetSheetName  = "Albums (Auto)"
 	DefaultSinglesSheetName = "Singles (Auth)"
+	DefaultEPSheetName      = "EP (Auto)"
 	DateHeader              = "Date Listened"
 	ArtistHeader            = "Artist"
 	AlbumHeader             = "Album"
@@ -27,6 +28,7 @@ type Config struct {
 	GoogleServiceAccountJSON string
 	TargetSheetName          string
 	SinglesSheetName         string
+	EPSheetName              string
 	LegacySourceSheetName    string
 	Timezone                 string
 	SyncWindowHours          int
@@ -73,14 +75,15 @@ type AlbumTrack struct {
 }
 
 type AlbumMetadata struct {
-	Artist       string       `json:"artist"`
-	Album        string       `json:"album"`
-	MBID         string       `json:"mbid,omitempty"`
-	ReleaseDate  string       `json:"release_date,omitempty"`
-	Year         string       `json:"year,omitempty"`
-	Tracks       []AlbumTrack `json:"tracks,omitempty"`
-	SourceArtist string       `json:"source_artist,omitempty"`
-	SourceAlbum  string       `json:"source_album,omitempty"`
+	Artist           string       `json:"artist"`
+	Album            string       `json:"album"`
+	MBID             string       `json:"mbid,omitempty"`
+	ReleaseDate      string       `json:"release_date,omitempty"`
+	Year             string       `json:"year,omitempty"`
+	Tracks           []AlbumTrack `json:"tracks,omitempty"`
+	SourceArtist     string       `json:"source_artist,omitempty"`
+	SourceAlbum      string       `json:"source_album,omitempty"`
+	ReleaseGroupType string       `json:"release_group_type,omitempty"`
 }
 
 type SheetRow struct {
