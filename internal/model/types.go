@@ -115,13 +115,14 @@ type State struct {
 }
 
 type AlbumState struct {
-	Artist            string `json:"artist"`
-	Album             string `json:"album"`
-	Year              string `json:"year,omitempty"`
-	FirstScrobbleUnix int64  `json:"first_scrobble_unix,omitempty"`
-	TrackCount        int    `json:"track_count,omitempty"`
-	HeardRanks        []int  `json:"heard_ranks,omitempty"`
-	Completed         bool   `json:"completed,omitempty"`
+	Artist            string   `json:"artist"`
+	Album             string   `json:"album"`
+	Year              string   `json:"year,omitempty"`
+	FirstScrobbleUnix int64    `json:"first_scrobble_unix,omitempty"`
+	TrackCount        int      `json:"track_count,omitempty"`
+	HeardRanks        []int    `json:"heard_ranks,omitempty"`
+	Completed         bool     `json:"completed,omitempty"`
+	VArtists          []string `json:"va_artists,omitempty"`
 }
 
 func (s *AlbumState) HeardSet() map[int]bool {

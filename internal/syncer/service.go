@@ -332,6 +332,10 @@ func looksLikeSingleRelease(trackName, albumName string) bool {
 	return model.NormalizeText(trackName) == model.NormalizeText(albumName)
 }
 
+func isVariousArtists(artist string) bool {
+	return strings.EqualFold(strings.TrimSpace(artist), "various artists")
+}
+
 func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, singlesIdx, epIdx *sheetIndex, st *model.State, scrobble model.Scrobble) error {
 	summary.ScrobblesProcessed++
 	if scrobble.NowPlaying || scrobble.Timestamp <= 0 || strings.TrimSpace(scrobble.Album) == "" {
@@ -349,6 +353,10 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 	rawKey := model.NormalizeKey(scrobble.Artist, scrobble.Album)
 	canonicalArtist := stripArtistFeatures(firstNonEmpty(meta.Artist, scrobble.Artist))
 	canonicalAlbum := firstNonEmpty(meta.Album, scrobble.Album)
+	va := isVariousArtists(meta.Artist)
+	if va {
+		canonicalArtist = "Various Artists"
+	}
 	canonicalKey := model.NormalizeKey(canonicalArtist, canonicalAlbum)
 
 	row, chosenKey := idx.lookup(canonicalKey, rawKey)
@@ -390,6 +398,27 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 	}
 	activeIdx.addAlias(rawKey, row)
 	activeIdx.addAlias(canonicalKey, row)
+
+	if va {
+		trackArtist := stripArtistFeatures(scrobble.Artist)
+		if trackArtist != "" && !isVariousArtists(trackArtist) {
+			found := false
+			for _, a := range albumState.VArtists {
+				if strings.EqualFold(a, trackArtist) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				albumState.VArtists = append(albumState.VArtists, trackArtist)
+				newArtist := strings.Join(albumState.VArtists, `\\`)
+				if row.Artist != newArtist {
+					row.Artist = newArtist
+					row.Dirty = true
+				}
+			}
+		}
+	}
 
 	if !albumState.Completed && strings.TrimSpace(row.DateListened) != "" {
 		albumState.Completed = true
@@ -633,6 +662,9 @@ func upsertStateFromRow(st *model.State, key string, row *model.SheetRow, loc *t
 	current := (*st).Albums[key]
 	current.Artist = row.Artist
 	current.Album = row.Album
+	if strings.Contains(row.Artist, `\\`) && len(current.VArtists) == 0 {
+		current.VArtists = strings.Split(row.Artist, `\\`)
+	}
 	current.Year = firstNonEmpty(current.Year, row.Year)
 
 	if dt, ok := parseFlexibleDate(row.DateListened, loc); ok {
