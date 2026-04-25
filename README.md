@@ -1,34 +1,35 @@
 # Last.fm Sheet Sync
 
-A small Go service that pulls scrobbles from Last.fm, resolves album tracklists, and writes one deduplicated row per album into a Google Sheets tab named `Albums (Auto)`.
+A small Go service that pulls scrobbles from Last.fm, resolves album tracklists via Last.fm and MusicBrainz, and writes one deduplicated row per release into a Google Sheets tab.
 
 The workflow it supports is:
 
 1. **Optional:** import your legacy manual sheet into the automation tab.
 2. Run a one-time **backfill** against all available Last.fm history.
-3. Schedule **sync** once per day (or more often) on your mini PC.
+3. Schedule **sync** once per day (or more often) on your machine.
 
 ## What it does
 
-For each album it sees:
+For each release it sees:
 
 - creates at most **one row** in the target sheet
-- uses the **first time** the album was heard as the value for `Date Listened`
-- leaves `Date Listened` blank while the album is still incomplete
+- uses the **first time** the release was heard as the value for `Date Listened`
+- leaves `Date Listened` blank while the release is still incomplete
 - writes the **lowest missing track number** into `Notes` while incomplete
-- ignores future listens after the album is complete
+- ignores future listens after the release is complete
+- routes releases to the correct sheet based on MusicBrainz `primary-type`:
+  - `Album` → `Albums (Auto)`
+  - `EP` → `EP (Auto)`
+  - `Single` → `Singles (Auto)`
+  - Unknown (no MBID) with one track → `Singles (Auto)`
 
-The target row shape matches your layout:
+The row shape is:
 
 - `Date Listened`
 - `Artist`
 - `Album`
 - `Year`
-- `Live Music Location`
-- `Download`
 - `Notes`
-
-`Live Music Location` and `Download` are preserved if they already exist, but the automation logic does not use them.
 
 ## Project structure
 
@@ -38,7 +39,6 @@ The target row shape matches your layout:
 - `internal/googleauth` – service-account JWT/OAuth flow
 - `internal/syncer` – album progress logic and sheet updates
 - `.env.example` – environment variable template
-- `Dockerfile` / `docker-compose.yml` – optional container setup
 
 ## Requirements
 
@@ -80,10 +80,6 @@ mkdir -p secrets
 
 ### 4. Fill in `.env`
 
-The main file for environment variables is:
-
-- **`.env`**
-
 The most important values are:
 
 ```env
@@ -91,8 +87,9 @@ LASTFM_API_KEY=your_lastfm_api_key
 LASTFM_USERNAME=your_lastfm_username
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SERVICE_ACCOUNT_JSON=./secrets/google-service-account.json
-ALBUMS_SHEET_NAME=Albums (Auto)
+TARGET_SHEET_NAME=Albums (Auto)
 SINGLES_SHEET_NAME=Singles (Auto)
+EP_SHEET_NAME=EP (Auto)
 LEGACY_SOURCE_SHEET_NAME=Album Log
 TIMEZONE=America/Chicago
 ```
@@ -194,7 +191,7 @@ Required for normal sync/backfill:
 
 Common optional values:
 
-- `ALBUMS_SHEET_NAME` – defaults to `Albums (Auto)`
+- `TARGET_SHEET_NAME` – defaults to `Albums (Auto)`
 - `EP_SHEET_NAME` – defaults to `EP (Auto)`
 - `SINGLES_SHEET_NAME` – defaults to `Singles (Auto)`
 - `LEGACY_SOURCE_SHEET_NAME` – only needed for `import-legacy`
@@ -210,52 +207,19 @@ Common optional values:
 The app stores a small amount of local state:
 
 - `./data/state/state.json` – sync cursor and album progress
-- `./data/cache/*.json` – cached album metadata from Last.fm
-
-These should be persisted if you use Docker.
+- `./data/cache/*.json` – cached album metadata from Last.fm and MusicBrainz
 
 ## Scheduling with cron
 
-Example host cron entry:
+Example cron entry:
 
 ```cron
 15 2 * * * cd /opt/lastfm-sheet-sync && ./bin/lastfm-sheet-sync sync >> ./logs/sync.log 2>&1
 ```
 
-Or with Docker Compose:
-
-```cron
-15 2 * * * cd /opt/lastfm-sheet-sync && docker compose run --rm lastfm-sheet-sync sync >> ./logs/sync.log 2>&1
-```
-
-A sample command is also included in `scripts/cron.example`.
-
-## Docker
-
-Build and run once:
-
-```bash
-docker compose build
-docker compose run --rm lastfm-sheet-sync sync
-```
-
-For the first full import:
-
-```bash
-docker compose run --rm lastfm-sheet-sync backfill --reset-state
-```
-
-The compose file mounts:
-
-- `./.env`
-- `./secrets`
-- `./data`
-
-so your credentials, cache, and state survive container restarts.
-
 ## Notes and limitations
 
-- The app uses Last.fm album metadata to get tracklists. If Last.fm has no tracklist for a release, the result can be less precise.
+- The app uses Last.fm album metadata to get tracklists. If Last.fm has no tracklist for a release, it falls back to MusicBrainz.
 - Track completion is matched by normalized track title within the album tracklist.
 - Alternate editions, deluxe editions, and compilation albums can occasionally need a manual cleanup pass.
 - Google Sheets access is spreadsheet-wide for the service account; the scope is not limited to only one tab.
