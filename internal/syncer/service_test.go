@@ -35,6 +35,66 @@ func TestMatchTrackToRankUsesNextDuplicate(t *testing.T) {
 	}
 }
 
+func TestStripArtistFeatures(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Ty Dolla $ign feat. Future", "Ty Dolla $ign"},
+		{"Drake ft. Lil Wayne", "Drake"},
+		{"Artist featuring Guest", "Artist"},
+		{"Artist with Guest", "Artist"},
+		{"Jay-Z & Kanye West", "Jay-Z & Kanye West"},
+		{"Artist (feat. Guest)", "Artist"},
+		{"Solo Artist", "Solo Artist"},
+	}
+	for _, c := range cases {
+		if got := stripArtistFeatures(c.in); got != c.want {
+			t.Errorf("stripArtistFeatures(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestMissingTracksNote(t *testing.T) {
+	cases := []struct {
+		heard       map[int]bool
+		totalTracks int
+		want        string
+	}{
+		{map[int]bool{1: true, 2: true, 4: true}, 5, "3, 5"},
+		{map[int]bool{}, 3, "1, 2, 3"},
+		{map[int]bool{1: true, 2: true, 3: true}, 3, ""},
+		{map[int]bool{1: true}, 1, ""},
+	}
+	for _, c := range cases {
+		if got := missingTracksNote(c.heard, c.totalTracks); got != c.want {
+			t.Errorf("missingTracksNote(%v, %d) = %q, want %q", c.heard, c.totalTracks, got, c.want)
+		}
+	}
+}
+
+func TestParseMissingTracks(t *testing.T) {
+	cases := []struct {
+		in   string
+		want map[int]bool
+	}{
+		{"3, 5", map[int]bool{3: true, 5: true}},
+		{"1", map[int]bool{1: true}},
+		{"", nil},
+		{"not a number", nil},
+		{"3, bad", nil},
+	}
+	for _, c := range cases {
+		got := parseMissingTracks(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("parseMissingTracks(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for k := range c.want {
+			if !got[k] {
+				t.Errorf("parseMissingTracks(%q): missing key %d", c.in, k)
+			}
+		}
+	}
+}
+
 func TestParseFlexibleDate(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	if err != nil {

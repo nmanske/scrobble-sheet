@@ -22,6 +22,8 @@ import (
 )
 
 const apiBase = "https://ws.audioscrobbler.com/2.0/"
+const mbAPIBase = "https://musicbrainz.org/ws/2/"
+const mbDelay = time.Second
 
 type Client struct {
 	apiKey    string
@@ -33,6 +35,9 @@ type Client struct {
 
 	mu       sync.Mutex
 	lastCall time.Time
+
+	mbMu       sync.Mutex
+	mbLastCall time.Time
 }
 
 type recentTracksResponse struct {
@@ -219,6 +224,12 @@ func (c *Client) FetchAllScrobbles(ctx context.Context) ([]model.Scrobble, error
 func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (model.AlbumMetadata, error) {
 	key := albumCacheKey(artist, album, mbid)
 	if cached, ok := c.readAlbumCache(key); ok {
+		if cached.Year == "" && cached.MBID != "" {
+			if year := c.fetchYearFromMusicBrainz(ctx, cached.MBID); year != "" {
+				cached.Year = year
+				_ = c.writeAlbumCache(key, cached)
+			}
+		}
 		return cached, nil
 	}
 
@@ -302,6 +313,11 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			meta.Album = album
 		}
 
+		if meta.Year == "" && meta.MBID != "" {
+			if year := c.fetchYearFromMusicBrainz(ctx, meta.MBID); year != "" {
+				meta.Year = year
+			}
+		}
 		_ = c.writeAlbumCache(key, meta)
 		return meta, nil
 	}
@@ -396,6 +412,66 @@ func (c *Client) wait(ctx context.Context) error {
 	}
 	c.lastCall = time.Now()
 	return nil
+}
+
+type mbReleaseResponse struct {
+	Date         string         `json:"date"`
+	ReleaseGroup mbReleaseGroup `json:"release-group"`
+}
+
+type mbReleaseGroup struct {
+	FirstReleaseDate string `json:"first-release-date"`
+}
+
+func (c *Client) waitMB(ctx context.Context) error {
+	c.mbMu.Lock()
+	defer c.mbMu.Unlock()
+	next := c.mbLastCall.Add(mbDelay)
+	now := time.Now()
+	if now.Before(next) {
+		timer := time.NewTimer(next.Sub(now))
+		defer timer.Stop()
+		c.mbMu.Unlock()
+		select {
+		case <-ctx.Done():
+			c.mbMu.Lock()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		c.mbMu.Lock()
+	}
+	c.mbLastCall = time.Now()
+	return nil
+}
+
+func (c *Client) fetchYearFromMusicBrainz(ctx context.Context, mbid string) string {
+	if err := c.waitMB(ctx); err != nil {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		mbAPIBase+"release/"+mbid+"?inc=release-groups&fmt=json", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	resp, err := c.http.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return ""
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var result mbReleaseResponse
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return ""
+	}
+	date := result.ReleaseGroup.FirstReleaseDate
+	if date == "" {
+		date = result.Date
+	}
+	return extractYear(date)
 }
 
 func toScrobble(track recentXMLTrack) model.Scrobble {

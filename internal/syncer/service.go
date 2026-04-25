@@ -272,7 +272,7 @@ func (s *Service) loadSheetIndex(ctx context.Context, sheetName string) (*sheetI
 			continue
 		}
 		current := rowToSheetRow(rowNumber, row)
-		key := model.NormalizeKey(current.Artist, current.Album)
+		key := model.NormalizeKey(stripArtistFeatures(current.Artist), current.Album)
 		if key == "|" || key == "" {
 			continue
 		}
@@ -309,7 +309,7 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 	}
 
 	rawKey := model.NormalizeKey(scrobble.Artist, scrobble.Album)
-	canonicalArtist := firstNonEmpty(meta.Artist, scrobble.Artist)
+	canonicalArtist := stripArtistFeatures(firstNonEmpty(meta.Artist, scrobble.Artist))
 	canonicalAlbum := firstNonEmpty(meta.Album, scrobble.Album)
 	canonicalKey := model.NormalizeKey(canonicalArtist, canonicalAlbum)
 
@@ -434,8 +434,7 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 	albumState.SetHeardSet(heard)
 	albumState.TrackCount = trackCount
 
-	lowestMissing := lowestMissingTrack(heard, trackCount)
-	if lowestMissing == 0 {
+	if lowestMissingTrack(heard, trackCount) == 0 {
 		oldDate := row.DateListened
 		oldNotes := row.Notes
 		row.DateListened = firstNonEmpty(row.DateListened, s.formatDate(albumState.FirstScrobbleUnix))
@@ -448,7 +447,7 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 		}
 		albumState.Completed = true
 	} else {
-		desiredNote := strconv.Itoa(lowestMissing)
+		desiredNote := missingTracksNote(heard, trackCount)
 		if row.DateListened != "" || row.Notes != desiredNote {
 			row.DateListened = ""
 			row.Notes = desiredNote
@@ -595,15 +594,23 @@ func upsertStateFromRow(st *model.State, key string, row *model.SheetRow, loc *t
 		}
 		current.HeardRanks = nil
 		current.TrackCount = 0
-	} else if next := numericNote(row.Notes); next > 1 {
+	} else if missingSet := parseMissingTracks(row.Notes); len(missingSet) > 0 {
+		maxMissing := 0
+		for rank := range missingSet {
+			if rank > maxMissing {
+				maxMissing = rank
+			}
+		}
 		heard := make(map[int]bool)
-		for rank := 1; rank < next; rank++ {
-			heard[rank] = true
+		for rank := 1; rank <= maxMissing; rank++ {
+			if !missingSet[rank] {
+				heard[rank] = true
+			}
 		}
 		current.SetHeardSet(heard)
 		current.Completed = false
-		if current.TrackCount < next-1 {
-			current.TrackCount = next - 1
+		if current.TrackCount < maxMissing {
+			current.TrackCount = maxMissing
 		}
 	}
 
@@ -618,6 +625,12 @@ func highestTrackRank(meta model.AlbumMetadata) int {
 		}
 	}
 	return maxRank
+}
+
+var reArtistFeat = regexp.MustCompile(`(?i)\s*[\[(]?\s*(feat\.?|ft\.?|featuring|with)\b.*`)
+
+func stripArtistFeatures(artist string) string {
+	return strings.TrimSpace(reArtistFeat.ReplaceAllString(artist, ""))
 }
 
 func normalizeTrackName(s string) string {
@@ -696,6 +709,33 @@ func lowestMissingTrack(heard map[int]bool, totalTracks int) int {
 	return 0
 }
 
+func missingTracksNote(heard map[int]bool, totalTracks int) string {
+	var parts []string
+	for rank := 1; rank <= totalTracks; rank++ {
+		if !heard[rank] {
+			parts = append(parts, strconv.Itoa(rank))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func parseMissingTracks(value string) map[int]bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make(map[int]bool, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil || n <= 0 {
+			return nil
+		}
+		out[n] = true
+	}
+	return out
+}
+
 func findState(st model.State, keys ...string) (string, model.AlbumState) {
 	for _, key := range keys {
 		if key == "" {
@@ -766,6 +806,9 @@ func numericNote(value string) int {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0
+	}
+	if idx := strings.Index(value, ","); idx != -1 {
+		value = strings.TrimSpace(value[:idx])
 	}
 	n, err := strconv.Atoi(value)
 	if err != nil {
