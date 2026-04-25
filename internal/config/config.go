@@ -21,7 +21,7 @@ func Load() (model.Config, error) {
 		LastFMUsername:           strings.TrimSpace(os.Getenv("LASTFM_USERNAME")),
 		GoogleSpreadsheetID:      strings.TrimSpace(os.Getenv("GOOGLE_SPREADSHEET_ID")),
 		GoogleServiceAccountJSON: strings.TrimSpace(os.Getenv("GOOGLE_SERVICE_ACCOUNT_JSON")),
-		TargetSheetName:          firstNonEmpty(strings.TrimSpace(os.Getenv("TARGET_SHEET_NAME")), model.DefaultTargetSheetName),
+		TargetSheetName:          firstNonEmpty(strings.TrimSpace(os.Getenv("ALBUMS_SHEET_NAME")), model.DefaultTargetSheetName),
 		SinglesSheetName:         firstNonEmpty(strings.TrimSpace(os.Getenv("SINGLES_SHEET_NAME")), model.DefaultSinglesSheetName),
 		EPSheetName:              firstNonEmpty(strings.TrimSpace(os.Getenv("EP_SHEET_NAME")), model.DefaultEPSheetName),
 		LegacySourceSheetName:    strings.TrimSpace(os.Getenv("LEGACY_SOURCE_SHEET_NAME")),

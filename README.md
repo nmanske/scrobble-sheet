@@ -91,8 +91,8 @@ LASTFM_API_KEY=your_lastfm_api_key
 LASTFM_USERNAME=your_lastfm_username
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SERVICE_ACCOUNT_JSON=./secrets/google-service-account.json
-TARGET_SHEET_NAME=Albums (Auto)
-SINGLES_SHEET_NAME=Singles (Auth)
+ALBUMS_SHEET_NAME=Albums (Auto)
+SINGLES_SHEET_NAME=Singles (Auto)
 LEGACY_SOURCE_SHEET_NAME=Album Log
 TIMEZONE=America/Chicago
 ```
@@ -194,7 +194,9 @@ Required for normal sync/backfill:
 
 Common optional values:
 
-- `TARGET_SHEET_NAME` – defaults to `Albums (Auto)`
+- `ALBUMS_SHEET_NAME` – defaults to `Albums (Auto)`
+- `EP_SHEET_NAME` – defaults to `EP (Auto)`
+- `SINGLES_SHEET_NAME` – defaults to `Singles (Auto)`
 - `LEGACY_SOURCE_SHEET_NAME` – only needed for `import-legacy`
 - `TIMEZONE` – defaults to `America/Chicago`
 - `SYNC_WINDOW_HOURS` – defaults to `24`

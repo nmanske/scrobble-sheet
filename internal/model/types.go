@@ -9,7 +9,7 @@ import (
 
 const (
 	DefaultTargetSheetName  = "Albums (Auto)"
-	DefaultSinglesSheetName = "Singles (Auth)"
+	DefaultSinglesSheetName = "Singles (Auto)"
 	DefaultEPSheetName      = "EP (Auto)"
 	DateHeader              = "Date Listened"
 	ArtistHeader            = "Artist"
