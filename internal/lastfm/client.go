@@ -224,9 +224,18 @@ func (c *Client) FetchAllScrobbles(ctx context.Context) ([]model.Scrobble, error
 func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (model.AlbumMetadata, error) {
 	key := albumCacheKey(artist, album, mbid)
 	if cached, ok := c.readAlbumCache(key); ok {
-		if cached.Year == "" && cached.MBID != "" {
-			if year := c.fetchYearFromMusicBrainz(ctx, cached.MBID); year != "" {
-				cached.Year = year
+		if (cached.Year == "" || len(cached.Tracks) == 0) && cached.MBID != "" {
+			mb := c.fetchFromMusicBrainz(ctx, cached.MBID)
+			updated := false
+			if cached.Year == "" && mb.Year != "" {
+				cached.Year = mb.Year
+				updated = true
+			}
+			if len(cached.Tracks) == 0 && len(mb.Tracks) > 0 {
+				cached.Tracks = mb.Tracks
+				updated = true
+			}
+			if updated {
 				_ = c.writeAlbumCache(key, cached)
 			}
 		}
@@ -313,9 +322,13 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			meta.Album = album
 		}
 
-		if meta.Year == "" && meta.MBID != "" {
-			if year := c.fetchYearFromMusicBrainz(ctx, meta.MBID); year != "" {
-				meta.Year = year
+		if (meta.Year == "" || len(meta.Tracks) == 0) && meta.MBID != "" {
+			mb := c.fetchFromMusicBrainz(ctx, meta.MBID)
+			if meta.Year == "" && mb.Year != "" {
+				meta.Year = mb.Year
+			}
+			if len(meta.Tracks) == 0 && len(mb.Tracks) > 0 {
+				meta.Tracks = mb.Tracks
 			}
 		}
 		_ = c.writeAlbumCache(key, meta)
@@ -417,10 +430,21 @@ func (c *Client) wait(ctx context.Context) error {
 type mbReleaseResponse struct {
 	Date         string         `json:"date"`
 	ReleaseGroup mbReleaseGroup `json:"release-group"`
+	Media        []mbMedium     `json:"media"`
 }
 
 type mbReleaseGroup struct {
 	FirstReleaseDate string `json:"first-release-date"`
+}
+
+type mbMedium struct {
+	Position int       `json:"position"`
+	Tracks   []mbTrack `json:"tracks"`
+}
+
+type mbTrack struct {
+	Position int    `json:"position"`
+	Title    string `json:"title"`
 }
 
 func (c *Client) waitMB(ctx context.Context) error {
@@ -444,14 +468,19 @@ func (c *Client) waitMB(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) fetchYearFromMusicBrainz(ctx context.Context, mbid string) string {
+type mbReleaseData struct {
+	Year   string
+	Tracks []model.AlbumTrack
+}
+
+func (c *Client) fetchFromMusicBrainz(ctx context.Context, mbid string) mbReleaseData {
 	if err := c.waitMB(ctx); err != nil {
-		return ""
+		return mbReleaseData{}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		mbAPIBase+"release/"+mbid+"?inc=release-groups&fmt=json", nil)
 	if err != nil {
-		return ""
+		return mbReleaseData{}
 	}
 	req.Header.Set("User-Agent", c.userAgent)
 	resp, err := c.http.Do(req)
@@ -459,19 +488,39 @@ func (c *Client) fetchYearFromMusicBrainz(ctx context.Context, mbid string) stri
 		if resp != nil {
 			resp.Body.Close()
 		}
-		return ""
+		return mbReleaseData{}
 	}
 	defer resp.Body.Close()
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var result mbReleaseResponse
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return ""
+		return mbReleaseData{}
 	}
 	date := result.ReleaseGroup.FirstReleaseDate
 	if date == "" {
 		date = result.Date
 	}
-	return extractYear(date)
+	return mbReleaseData{
+		Year:   extractYear(date),
+		Tracks: tracksFromMBMedia(result.Media),
+	}
+}
+
+func tracksFromMBMedia(media []mbMedium) []model.AlbumTrack {
+	sort.Slice(media, func(i, j int) bool { return media[i].Position < media[j].Position })
+	var tracks []model.AlbumTrack
+	rank := 1
+	for _, m := range media {
+		sort.Slice(m.Tracks, func(i, j int) bool { return m.Tracks[i].Position < m.Tracks[j].Position })
+		for _, t := range m.Tracks {
+			name := strings.TrimSpace(t.Title)
+			if name != "" {
+				tracks = append(tracks, model.AlbumTrack{Rank: rank, Name: name})
+				rank++
+			}
+		}
+	}
+	return tracks
 }
 
 func toScrobble(track recentXMLTrack) model.Scrobble {
