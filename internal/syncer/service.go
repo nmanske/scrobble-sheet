@@ -84,11 +84,16 @@ func (s *Service) runSync(ctx context.Context, opts model.RuntimeOptions) (Summa
 	if err != nil {
 		return Summary{}, err
 	}
+	singlesIdx, err := s.loadSheetIndex(ctx, s.cfg.SinglesSheetName)
+	if err != nil {
+		return Summary{}, err
+	}
 	st, err := s.stateStore.Load()
 	if err != nil {
 		return Summary{}, err
 	}
 	s.seedStateFromTargetRows(&st, idx)
+	s.seedStateFromTargetRows(&st, singlesIdx)
 
 	fromUnix, toUnix, err := s.computeSyncWindow(st, opts)
 	if err != nil {
@@ -102,13 +107,13 @@ func (s *Service) runSync(ctx context.Context, opts model.RuntimeOptions) (Summa
 	}
 	summary := Summary{}
 	for _, scrobble := range scrobbles {
-		if err := s.applyScrobble(ctx, &summary, idx, &st, scrobble); err != nil {
+		if err := s.applyScrobble(ctx, &summary, idx, singlesIdx, &st, scrobble); err != nil {
 			return summary, err
 		}
 	}
 
 	st.LastSuccessfulSyncUTC = time.Unix(toUnix, 0).UTC().Format(time.RFC3339)
-	if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
+	if err := s.persist(ctx, idx, singlesIdx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 		return summary, err
 	}
 	return summary, nil
@@ -131,10 +136,15 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 	if err != nil {
 		return Summary{}, err
 	}
+	singlesIdx, err := s.loadSheetIndex(ctx, s.cfg.SinglesSheetName)
+	if err != nil {
+		return Summary{}, err
+	}
 	st, err := s.stateStore.Load()
 	if err != nil {
 		return Summary{}, err
 	}
+	s.seedStateFromTargetRows(&st, singlesIdx)
 
 	s.logger.Printf("backfill: fetching full Last.fm history...")
 	scrobbles, err := s.lastfm.FetchAllScrobbles(ctx)
@@ -145,13 +155,13 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 
 	summary := Summary{}
 	for i, scrobble := range scrobbles {
-		if err := s.applyScrobble(ctx, &summary, idx, &st, scrobble); err != nil {
+		if err := s.applyScrobble(ctx, &summary, idx, singlesIdx, &st, scrobble); err != nil {
 			return summary, err
 		}
 
 		if i > 0 && i%500 == 0 {
 			s.logger.Printf("backfill: checkpoint at %d / %d", i, len(scrobbles))
-			if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
+			if err := s.persist(ctx, idx, singlesIdx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 				return summary, err
 			}
 		}
@@ -159,7 +169,7 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 
 	st.LastSuccessfulSyncUTC = time.Now().UTC().Format(time.RFC3339)
 	s.logger.Printf("backfill: persisting %d dirty row(s)", len(idx.dirtyRows()))
-	if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
+	if err := s.persist(ctx, idx, singlesIdx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 		return summary, err
 	}
 	return summary, nil
@@ -217,7 +227,8 @@ func (s *Service) runImportLegacy(ctx context.Context, opts model.RuntimeOptions
 		upsertStateFromRow(&st, key, row, s.loc)
 	}
 
-	if err := s.persist(ctx, idx, st, opts.DryRun || s.cfg.DryRun); err != nil {
+	singlesIdx := &sheetIndex{rowsByKey: make(map[string]*model.SheetRow), nextRow: 2}
+	if err := s.persist(ctx, idx, singlesIdx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 		return summary, err
 	}
 	return summary, nil
@@ -229,6 +240,14 @@ func (s *Service) prepareTargetSheet(ctx context.Context) error {
 	}
 	if err := s.sheets.EnsureHeaderRow(ctx, s.cfg.TargetSheetName); err != nil {
 		return fmt.Errorf("ensure header row: %w", err)
+	}
+	if s.cfg.SinglesSheetName != "" {
+		if err := s.sheets.EnsureSheet(ctx, s.cfg.SinglesSheetName); err != nil {
+			return fmt.Errorf("ensure singles sheet: %w", err)
+		}
+		if err := s.sheets.EnsureHeaderRow(ctx, s.cfg.SinglesSheetName); err != nil {
+			return fmt.Errorf("ensure singles header row: %w", err)
+		}
 	}
 	return nil
 }
@@ -294,7 +313,7 @@ func looksLikeSingleRelease(trackName, albumName string) bool {
 	return model.NormalizeText(trackName) == model.NormalizeText(albumName)
 }
 
-func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *sheetIndex, st *model.State, scrobble model.Scrobble) error {
+func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, singlesIdx *sheetIndex, st *model.State, scrobble model.Scrobble) error {
 	summary.ScrobblesProcessed++
 	if scrobble.NowPlaying || scrobble.Timestamp <= 0 || strings.TrimSpace(scrobble.Album) == "" {
 		summary.ScrobblesSkipped++
@@ -322,6 +341,17 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 		chosenKey = rawKey
 	}
 
+	// Route singles (1-track releases) to the singles sheet unless the row
+	// already exists in the main sheet (legacy entries stay where they are).
+	trackCount := highestTrackRank(meta)
+	activeIdx := idx
+	if trackCount == 1 && row == nil && singlesIdx != nil {
+		activeIdx = singlesIdx
+		if existing, _ := singlesIdx.lookup(canonicalKey, rawKey); existing != nil {
+			row = existing
+		}
+	}
+
 	if row == nil {
 		row = &model.SheetRow{
 			Key:      chosenKey,
@@ -331,11 +361,11 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 			Existing: false,
 			Dirty:    true,
 		}
-		idx.addRow(row)
+		activeIdx.addRow(row)
 		summary.AlbumsCreated++
 	}
-	idx.addAlias(rawKey, row)
-	idx.addAlias(canonicalKey, row)
+	activeIdx.addAlias(rawKey, row)
+	activeIdx.addAlias(canonicalKey, row)
 
 	if !albumState.Completed && strings.TrimSpace(row.DateListened) != "" {
 		albumState.Completed = true
@@ -372,19 +402,6 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx *shee
 	if albumState.FirstScrobbleUnix == 0 || scrobble.Timestamp < albumState.FirstScrobbleUnix {
 		albumState.FirstScrobbleUnix = scrobble.Timestamp
 	}
-
-	trackCount := highestTrackRank(meta)
-
-	// if trackCount == 1 && looksLikeSingleRelease(scrobble.TrackName, canonicalAlbum) {
-	// 	summary.ScrobblesSkipped++
-	// 	s.logger.Printf(
-	// 		"skipping likely single: artist=%q album=%q track=%q",
-	// 		canonicalArtist,
-	// 		canonicalAlbum,
-	// 		scrobble.TrackName,
-	// 	)
-	// 	return nil
-	// }
 
 	if trackCount == 0 {
 		summary.TracklistFallbacks++
@@ -475,10 +492,25 @@ func (s *Service) seedStateFromTargetRows(st *model.State, idx *sheetIndex) {
 	}
 }
 
-func (s *Service) persist(ctx context.Context, idx *sheetIndex, st model.State, dryRun bool) error {
+func (s *Service) persist(ctx context.Context, idx, singlesIdx *sheetIndex, st model.State, dryRun bool) error {
 	dirty := idx.dirtyRows()
+	singlesDirty := singlesIdx.dirtyRows()
 	if dryRun {
-		s.logger.Printf("dry run enabled: would write %d row(s) and save state file", len(dirty))
+		s.logger.Printf("dry run enabled: would write %d row(s) to main sheet, %d row(s) to singles sheet", len(dirty), len(singlesDirty))
+		return nil
+	}
+	if err := s.flushIndex(ctx, idx, s.cfg.TargetSheetName); err != nil {
+		return err
+	}
+	if err := s.flushIndex(ctx, singlesIdx, s.cfg.SinglesSheetName); err != nil {
+		return err
+	}
+	return s.stateStore.Save(st)
+}
+
+func (s *Service) flushIndex(ctx context.Context, idx *sheetIndex, sheetName string) error {
+	dirty := idx.dirtyRows()
+	if len(dirty) == 0 {
 		return nil
 	}
 	for _, row := range dirty {
@@ -489,13 +521,13 @@ func (s *Service) persist(ctx context.Context, idx *sheetIndex, st model.State, 
 		}
 	}
 	sort.Slice(dirty, func(i, j int) bool { return dirty[i].RowNumber < dirty[j].RowNumber })
-	if err := s.sheets.BatchWriteRows(ctx, s.cfg.TargetSheetName, dirty); err != nil {
+	if err := s.sheets.BatchWriteRows(ctx, sheetName, dirty); err != nil {
 		return err
 	}
 	for _, row := range dirty {
 		row.Dirty = false
 	}
-	return s.stateStore.Save(st)
+	return nil
 }
 
 func (s *Service) formatDate(unix int64) string {

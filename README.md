@@ -1,6 +1,6 @@
 # Last.fm Sheet Sync
 
-A small Go service that pulls scrobbles from Last.fm, resolves album tracklists, and writes one deduplicated row per album into a Google Sheets tab named `Last.fm Automation`.
+A small Go service that pulls scrobbles from Last.fm, resolves album tracklists, and writes one deduplicated row per album into a Google Sheets tab named `Albums (Auto)`.
 
 The workflow it supports is:
 
@@ -91,7 +91,8 @@ LASTFM_API_KEY=your_lastfm_api_key
 LASTFM_USERNAME=your_lastfm_username
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SERVICE_ACCOUNT_JSON=./secrets/google-service-account.json
-TARGET_SHEET_NAME=Last.fm Automation
+TARGET_SHEET_NAME=Albums (Auto)
+SINGLES_SHEET_NAME=Singles (Auth)
 LEGACY_SOURCE_SHEET_NAME=Album Log
 TIMEZONE=America/Chicago
 ```
@@ -118,7 +119,7 @@ Set `LEGACY_SOURCE_SHEET_NAME` in `.env`, then run:
 go run ./cmd/lastfm-sheet-sync import-legacy
 ```
 
-This copies rows from your old sheet into `Last.fm Automation` and seeds local progress state. If `Notes` is numeric for incomplete albums, the importer assumes tracks `1..N-1` have already been heard.
+This copies rows from your old sheet into `Albums (Auto)` and seeds local progress state. If `Notes` is numeric for incomplete albums, the importer assumes tracks `1..N-1` have already been heard.
 
 ### One-time full Last.fm backfill
 
@@ -193,7 +194,7 @@ Required for normal sync/backfill:
 
 Common optional values:
 
-- `TARGET_SHEET_NAME` – defaults to `Last.fm Automation`
+- `TARGET_SHEET_NAME` – defaults to `Albums (Auto)`
 - `LEGACY_SOURCE_SHEET_NAME` – only needed for `import-legacy`
 - `TIMEZONE` – defaults to `America/Chicago`
 - `SYNC_WINDOW_HOURS` – defaults to `24`

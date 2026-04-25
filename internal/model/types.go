@@ -8,15 +8,16 @@ import (
 )
 
 const (
-	DefaultTargetSheetName = "Last.fm Automation"
-	DateHeader             = "Date Listened"
-	ArtistHeader           = "Artist"
-	AlbumHeader            = "Album"
-	YearHeader             = "Year"
-	LiveHeader             = "Live Music Location"
-	DownloadHeader         = "Download"
-	NotesHeader            = "Notes"
-	SheetColumnCount       = 7
+	DefaultTargetSheetName  = "Albums (Auto)"
+	DefaultSinglesSheetName = "Singles (Auth)"
+	DateHeader              = "Date Listened"
+	ArtistHeader            = "Artist"
+	AlbumHeader             = "Album"
+	YearHeader              = "Year"
+	LiveHeader              = "Live Music Location"
+	DownloadHeader          = "Download"
+	NotesHeader             = "Notes"
+	SheetColumnCount        = 7
 )
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	GoogleSpreadsheetID      string
 	GoogleServiceAccountJSON string
 	TargetSheetName          string
+	SinglesSheetName         string
 	LegacySourceSheetName    string
 	Timezone                 string
 	SyncWindowHours          int
