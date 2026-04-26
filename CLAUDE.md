@@ -60,41 +60,6 @@ Releases are routed to one of three tabs based on MusicBrainz `primary-type`:
 
 `model.NormalizeKey(artist, album)` produces a `"normalized_artist|normalized_album"` string used as the map key in both `state.json` and the in-memory `sheetIndex.rowsByKey`. Multiple key variants (raw scrobble, canonical from Last.fm) are aliased to the same `*SheetRow` pointer.
 
-### Various Artists handling
-
-When `artist == "Various Artists"`, individual track artists are accumulated in `AlbumState.VArtists` and written to the sheet as a `\\`-delimited string in the Artist column.
-
 ### Album completion
 
 An album is complete when every track rank 1..N has been heard. While incomplete, `Notes` holds a comma-separated list of missing track numbers and `DateListened` is blank. On completion, `DateListened` is set to the date of the first scrobble of that album and `Notes` is cleared.
-
-### Core Prompt Fix (drop-in)
-
-When processing album metadata for spreadsheet output, NEVER split artists into separate rows under any circumstance.
-
-If an album contains multiple artists (e.g. Various Artists compilations or featured tracks), they must be combined into a single cell in the artist column.
-
-Use \\ as the delimiter between artists in the same cell.
-
-STRICT RULES:
-One album = one row
-One cell per field (no row expansion for arrays)
-Artists must be concatenated into a single string
-Preserve original order of artists
-Do NOT normalize, explode, or flatten artist arrays into multiple records
-FORMAT EXAMPLE:
-
-Artist cell:
-
-Torus\\The Chariot\\Bladee
-
-Album cell:
-
-YEAR0001 - RIFT ONE
-ANTI-PATTERN (NEVER DO THIS):
-
-❌ Row 1: Torus | YEAR0001 - RIFT ONE
-❌ Row 2: The Chariot | YEAR0001 - RIFT ONE
-❌ Row 3: Bladee | YEAR0001 - RIFT ONE
-
-Any instruction that implies “one artist per row” is incorrect for this task.

@@ -122,7 +122,6 @@ type AlbumState struct {
 	TrackCount        int      `json:"track_count,omitempty"`
 	HeardRanks        []int    `json:"heard_ranks,omitempty"`
 	Completed         bool     `json:"completed,omitempty"`
-	VArtists          []string `json:"va_artists,omitempty"`
 }
 
 func (s *AlbumState) HeardSet() map[int]bool {
