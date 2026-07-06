@@ -208,7 +208,7 @@ func (s *Service) runImportLegacy(ctx context.Context, opts model.RuntimeOptions
 			continue
 		}
 		candidate := rowToSheetRow(rowIndex+1, row)
-		key := model.NormalizeKey(candidate.Artist, candidate.Album)
+		key := rowKey(candidate.Artist, candidate.Album)
 		if key == "|" || key == "" {
 			continue
 		}
@@ -310,7 +310,7 @@ func (s *Service) loadSheetIndex(ctx context.Context, sheetName string) (*sheetI
 			continue
 		}
 		current := rowToSheetRow(rowNumber, row)
-		key := model.NormalizeKey(stripArtistFeatures(current.Artist), current.Album)
+		key := rowKey(current.Artist, current.Album)
 		if key == "|" || key == "" {
 			continue
 		}
@@ -346,8 +346,24 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 		return nil
 	}
 
+	isVA := model.IsVariousArtists(meta.Artist)
+	if isVA && !model.IsVariousArtists(scrobble.Artist) {
+		// The resolution may be the speculative Various Artists fallback; only
+		// trust it if the scrobbled track actually appears on the tracklist.
+		if _, ok := matchTrackToRank(scrobble.TrackName, meta, nil); !ok {
+			summary.MetadataLookupFailures++
+			s.logger.Printf("warning: various-artists album %q does not contain track %q by %q; skipping scrobble", meta.Album, scrobble.TrackName, scrobble.Artist)
+			return nil
+		}
+	}
+
 	rawKey := model.NormalizeKey(scrobble.Artist, scrobble.Album)
 	canonicalArtist := stripArtistFeatures(firstNonEmpty(meta.Artist, scrobble.Artist))
+	if isVA {
+		// stripArtistFeatures would truncate joined credits containing "with";
+		// compilations always key under the canonical credit.
+		canonicalArtist = model.VariousArtistsName
+	}
 	canonicalAlbum := firstNonEmpty(meta.Album, scrobble.Album)
 	canonicalKey := model.NormalizeKey(canonicalArtist, canonicalAlbum)
 
@@ -394,7 +410,9 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 	if !albumState.Completed && strings.TrimSpace(row.DateListened) != "" {
 		albumState.Completed = true
 	}
-	if albumState.Artist == "" {
+	if isVA {
+		albumState.Artist = model.VariousArtistsName
+	} else if albumState.Artist == "" {
 		albumState.Artist = row.Artist
 	}
 	if albumState.Album == "" {
@@ -421,6 +439,14 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 	if row.Year == "" && meta.Year != "" {
 		row.Year = meta.Year
 		row.Dirty = true
+	}
+	if isVA {
+		// Full contributor list up front; never clobber a manually edited cell
+		// that no longer carries the Various Artists marker.
+		if cell := variousArtistsCell(meta); cell != row.Artist && model.IsVariousArtists(row.Artist) {
+			row.Artist = cell
+			row.Dirty = true
+		}
 	}
 
 	if albumState.FirstScrobbleUnix == 0 || scrobble.Timestamp < albumState.FirstScrobbleUnix {
@@ -675,6 +701,27 @@ func highestTrackRank(meta model.AlbumMetadata) int {
 	return maxRank
 }
 
+// rowKey derives the dedup key for a row's artist/album cells. A cell holding
+// a delimiter-joined Various Artists list keys under the canonical credit so
+// per-track scrobbles keep converging on the same row across runs.
+func rowKey(artist, album string) string {
+	if model.IsVariousArtists(artist) {
+		return model.NormalizeKey(model.VariousArtistsName, album)
+	}
+	return model.NormalizeKey(stripArtistFeatures(artist), album)
+}
+
+// variousArtistsCell renders the Artist cell for a compilation row: every
+// contributing artist from the tracklist, in track order, joined with the
+// delimiter. Falls back to the plain credit when no per-track artists exist.
+func variousArtistsCell(meta model.AlbumMetadata) string {
+	artists := meta.TrackArtists()
+	if len(artists) == 0 {
+		return model.VariousArtistsName
+	}
+	return strings.Join(artists, model.VariousArtistsDelimiter)
+}
+
 var reArtistFeat = regexp.MustCompile(`(?i)\s*[\[(]?\s*(feat\.?|ft\.?|featuring|with)\b.*`)
 
 func stripArtistFeatures(artist string) string {
@@ -683,6 +730,7 @@ func stripArtistFeatures(artist string) string {
 
 func normalizeTrackName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
+	original := s
 
 	// Replace common unicode punctuation with spaces or nothing.
 	replacer := strings.NewReplacer(
@@ -715,6 +763,10 @@ func normalizeTrackName(s string) string {
 	// Collapse whitespace.
 	s = strings.Join(strings.Fields(s), " ")
 
+	if s == "" {
+		// Symbol-only track names (e.g. "❖") would otherwise never match.
+		return strings.Join(strings.Fields(original), " ")
+	}
 	return s
 }
 

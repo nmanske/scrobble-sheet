@@ -17,6 +17,9 @@ const (
 	YearHeader              = "Year"
 	NotesHeader             = "Notes"
 	SheetColumnCount        = 5
+
+	VariousArtistsName      = "Various Artists"
+	VariousArtistsDelimiter = ` \\ `
 )
 
 type Config struct {
@@ -68,8 +71,9 @@ type Scrobble struct {
 }
 
 type AlbumTrack struct {
-	Rank int    `json:"rank"`
-	Name string `json:"name"`
+	Rank   int    `json:"rank"`
+	Name   string `json:"name"`
+	Artist string `json:"artist,omitempty"`
 }
 
 type AlbumMetadata struct {
@@ -82,6 +86,36 @@ type AlbumMetadata struct {
 	SourceArtist     string       `json:"source_artist,omitempty"`
 	SourceAlbum      string       `json:"source_album,omitempty"`
 	ReleaseGroupType string       `json:"release_group_type,omitempty"`
+}
+
+// IsVariousArtists reports whether an artist credit refers to a Various
+// Artists compilation, either as the literal credit or as a sheet cell
+// already holding a delimiter-joined list of contributing artists.
+func IsVariousArtists(artist string) bool {
+	if strings.Contains(artist, VariousArtistsDelimiter) {
+		return true
+	}
+	return NormalizeText(artist) == "various artists"
+}
+
+// TrackArtists returns the per-track artists in rank order, deduplicated by
+// normalized name, skipping tracks without artist credits.
+func (m AlbumMetadata) TrackArtists() []string {
+	seen := make(map[string]bool, len(m.Tracks))
+	var out []string
+	for _, tr := range m.Tracks {
+		artist := strings.TrimSpace(tr.Artist)
+		if artist == "" {
+			continue
+		}
+		norm := NormalizeText(artist)
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		out = append(out, artist)
+	}
+	return out
 }
 
 type SheetRow struct {
@@ -115,13 +149,13 @@ type State struct {
 }
 
 type AlbumState struct {
-	Artist            string   `json:"artist"`
-	Album             string   `json:"album"`
-	Year              string   `json:"year,omitempty"`
-	FirstScrobbleUnix int64    `json:"first_scrobble_unix,omitempty"`
-	TrackCount        int      `json:"track_count,omitempty"`
-	HeardRanks        []int    `json:"heard_ranks,omitempty"`
-	Completed         bool     `json:"completed,omitempty"`
+	Artist            string `json:"artist"`
+	Album             string `json:"album"`
+	Year              string `json:"year,omitempty"`
+	FirstScrobbleUnix int64  `json:"first_scrobble_unix,omitempty"`
+	TrackCount        int    `json:"track_count,omitempty"`
+	HeardRanks        []int  `json:"heard_ranks,omitempty"`
+	Completed         bool   `json:"completed,omitempty"`
 }
 
 func (s *AlbumState) HeardSet() map[int]bool {
@@ -191,5 +225,11 @@ func NormalizeText(in string) string {
 			}
 		}
 	}
-	return strings.Join(strings.Fields(b.String()), " ")
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if out == "" {
+		// Symbol-only names (e.g. "❖") would otherwise normalize to "",
+		// producing colliding/skipped dedup keys and duplicate sheet rows.
+		return strings.Join(strings.Fields(in), " ")
+	}
+	return out
 }

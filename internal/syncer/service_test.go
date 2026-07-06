@@ -52,6 +52,49 @@ func TestStripArtistFeatures(t *testing.T) {
 	}
 }
 
+func TestRowKey(t *testing.T) {
+	joined := "Robbie Williams" + model.VariousArtistsDelimiter + "Kylie Minogue"
+	vaKey := model.NormalizeKey(model.VariousArtistsName, "Now 10")
+	cases := []struct {
+		artist, album, want string
+	}{
+		{"Various Artists", "Now 10", vaKey},
+		{joined, "Now 10", vaKey},
+		{"Drake ft. Lil Wayne", "Album", model.NormalizeKey("Drake", "Album")},
+		{"Talking Heads", "Remain in Light", model.NormalizeKey("Talking Heads", "Remain in Light")},
+	}
+	for _, c := range cases {
+		if got := rowKey(c.artist, c.album); got != c.want {
+			t.Errorf("rowKey(%q, %q) = %q, want %q", c.artist, c.album, got, c.want)
+		}
+	}
+}
+
+func TestVariousArtistsCell(t *testing.T) {
+	meta := model.AlbumMetadata{
+		Artist: model.VariousArtistsName,
+		Tracks: []model.AlbumTrack{
+			{Rank: 1, Name: "One", Artist: "Robbie Williams"},
+			{Rank: 2, Name: "Two", Artist: "Kylie Minogue"},
+			{Rank: 3, Name: "Three", Artist: "Robbie Williams"},
+		},
+	}
+	want := "Robbie Williams" + model.VariousArtistsDelimiter + "Kylie Minogue"
+	if got := variousArtistsCell(meta); got != want {
+		t.Fatalf("variousArtistsCell = %q, want %q", got, want)
+	}
+
+	// Without per-track artists the cell falls back to the plain credit, and
+	// rowKey must still map the fallback and the joined form to the same key.
+	bare := model.AlbumMetadata{Artist: model.VariousArtistsName}
+	if got := variousArtistsCell(bare); got != model.VariousArtistsName {
+		t.Fatalf("variousArtistsCell fallback = %q", got)
+	}
+	if rowKey(want, "Now 10") != rowKey(model.VariousArtistsName, "Now 10") {
+		t.Fatal("joined VA cell and plain credit derive different row keys")
+	}
+}
+
 func TestMissingTracksNote(t *testing.T) {
 	cases := []struct {
 		heard       map[int]bool

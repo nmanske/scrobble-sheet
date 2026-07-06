@@ -95,7 +95,12 @@ type albumTrackBlock struct {
 }
 
 type albumInfoTrack struct {
-	Rank int    `xml:"rank,attr"`
+	Rank   int                  `xml:"rank,attr"`
+	Name   string               `xml:"name"`
+	Artist albumInfoTrackArtist `xml:"artist"`
+}
+
+type albumInfoTrackArtist struct {
 	Name string `xml:"name"`
 }
 
@@ -224,14 +229,14 @@ func (c *Client) FetchAllScrobbles(ctx context.Context) ([]model.Scrobble, error
 func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (model.AlbumMetadata, error) {
 	key := albumCacheKey(artist, album, mbid)
 	if cached, ok := c.readAlbumCache(key); ok {
-		if cached.MBID != "" && (cached.Year == "" || len(cached.Tracks) == 0 || cached.ReleaseGroupType == "") {
+		if cached.MBID != "" && (cached.Year == "" || len(cached.Tracks) == 0 || cached.ReleaseGroupType == "" || missingTrackArtists(cached)) {
 			mb := c.fetchFromMusicBrainz(ctx, cached.MBID)
 			updated := false
 			if cached.Year == "" && mb.Year != "" {
 				cached.Year = mb.Year
 				updated = true
 			}
-			if len(cached.Tracks) == 0 && len(mb.Tracks) > 0 {
+			if (len(cached.Tracks) == 0 || missingTrackArtists(cached)) && len(mb.Tracks) > 0 {
 				cached.Tracks = mb.Tracks
 				updated = true
 			}
@@ -271,6 +276,18 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 		params.Set("api_key", c.apiKey)
 		params.Set("autocorrect", "1")
 		params.Set("mbid", mbid)
+		tryParams = append(tryParams, params)
+	}
+
+	// Compilation scrobbles carry the track's artist, under which Last.fm has
+	// no album entry; retry the lookup credited to Various Artists last.
+	if album != "" && !model.IsVariousArtists(artist) {
+		params := url.Values{}
+		params.Set("method", "album.getInfo")
+		params.Set("api_key", c.apiKey)
+		params.Set("autocorrect", "1")
+		params.Set("artist", model.VariousArtistsName)
+		params.Set("album", album)
 		tryParams = append(tryParams, params)
 	}
 
@@ -315,7 +332,11 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			if name == "" || rank <= 0 {
 				continue
 			}
-			meta.Tracks = append(meta.Tracks, model.AlbumTrack{Rank: rank, Name: name})
+			meta.Tracks = append(meta.Tracks, model.AlbumTrack{
+				Rank:   rank,
+				Name:   name,
+				Artist: strings.TrimSpace(tr.Artist.Name),
+			})
 		}
 		sort.Slice(meta.Tracks, func(i, j int) bool { return meta.Tracks[i].Rank < meta.Tracks[j].Rank })
 
@@ -326,12 +347,12 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 			meta.Album = album
 		}
 
-		if meta.MBID != "" && (meta.Year == "" || len(meta.Tracks) == 0 || meta.ReleaseGroupType == "") {
+		if meta.MBID != "" && (meta.Year == "" || len(meta.Tracks) == 0 || meta.ReleaseGroupType == "" || missingTrackArtists(meta)) {
 			mb := c.fetchFromMusicBrainz(ctx, meta.MBID)
 			if meta.Year == "" && mb.Year != "" {
 				meta.Year = mb.Year
 			}
-			if len(meta.Tracks) == 0 && len(mb.Tracks) > 0 {
+			if (len(meta.Tracks) == 0 || missingTrackArtists(meta)) && len(mb.Tracks) > 0 {
 				meta.Tracks = mb.Tracks
 			}
 			if meta.ReleaseGroupType == "" && mb.ReleaseGroupType != "" {
@@ -451,8 +472,23 @@ type mbMedium struct {
 }
 
 type mbTrack struct {
-	Position int    `json:"position"`
-	Title    string `json:"title"`
+	Position     int              `json:"position"`
+	Title        string           `json:"title"`
+	ArtistCredit []mbArtistCredit `json:"artist-credit"`
+}
+
+type mbArtistCredit struct {
+	Name       string `json:"name"`
+	JoinPhrase string `json:"joinphrase"`
+}
+
+func (t mbTrack) artistName() string {
+	var b strings.Builder
+	for _, credit := range t.ArtistCredit {
+		b.WriteString(credit.Name)
+		b.WriteString(credit.JoinPhrase)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (c *Client) waitMB(ctx context.Context) error {
@@ -487,7 +523,7 @@ func (c *Client) fetchFromMusicBrainz(ctx context.Context, mbid string) mbReleas
 		return mbReleaseData{}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		mbAPIBase+"release/"+mbid+"?inc=release-groups&fmt=json", nil)
+		mbAPIBase+"release/"+mbid+"?inc=release-groups+recordings+artist-credits&fmt=json", nil)
 	if err != nil {
 		return mbReleaseData{}
 	}
@@ -525,7 +561,7 @@ func tracksFromMBMedia(media []mbMedium) []model.AlbumTrack {
 		for _, t := range m.Tracks {
 			name := strings.TrimSpace(t.Title)
 			if name != "" {
-				tracks = append(tracks, model.AlbumTrack{Rank: rank, Name: name})
+				tracks = append(tracks, model.AlbumTrack{Rank: rank, Name: name, Artist: t.artistName()})
 				rank++
 			}
 		}
@@ -574,6 +610,21 @@ func extractYear(releaseDate string) string {
 		}
 	}
 	return ""
+}
+
+// missingTrackArtists reports whether a Various Artists tracklist still lacks
+// per-track artist credits (older cache entries, or Last.fm responses that
+// omit them), so MusicBrainz should be consulted to fill them in.
+func missingTrackArtists(meta model.AlbumMetadata) bool {
+	if !model.IsVariousArtists(meta.Artist) || len(meta.Tracks) == 0 {
+		return false
+	}
+	for _, tr := range meta.Tracks {
+		if strings.TrimSpace(tr.Artist) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func albumCacheKey(artist, album, mbid string) string {
