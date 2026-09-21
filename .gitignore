@@ -3,4 +3,4 @@
 /secrets/
 .env
 *.zip
-lastfm-sheet-sync
+/lastfm-sheet-sync
