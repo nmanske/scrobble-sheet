@@ -24,7 +24,7 @@ go run ./cmd/lastfm-sheet-sync import-legacy
 go build -o bin/lastfm-sheet-sync ./cmd/lastfm-sheet-sync
 ```
 
-Requires Go 1.23+. Uses only the standard library — no external dependencies.
+Requires Go 1.22+. Uses only the standard library — no external dependencies.
 
 ## Architecture
 

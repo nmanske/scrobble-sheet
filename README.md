@@ -48,7 +48,7 @@ The row shape is:
 
 ## Requirements
 
-- Go 1.23+
+- Go 1.22+
 - a Last.fm API key
 - a Google Cloud service account JSON key with access to your spreadsheet
 
