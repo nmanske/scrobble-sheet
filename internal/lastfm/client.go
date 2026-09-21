@@ -359,7 +359,12 @@ func (c *Client) ResolveAlbum(ctx context.Context, artist, album, mbid string) (
 				meta.ReleaseGroupType = mb.ReleaseGroupType
 			}
 		}
-		_ = c.writeAlbumCache(key, meta)
+		// Don't persist a resolution we can never improve on: with no tracks and
+		// no MBID the cache read path never refreshes it, so the release would be
+		// stranded incomplete on every future run.
+		if len(meta.Tracks) > 0 || meta.MBID != "" {
+			_ = c.writeAlbumCache(key, meta)
+		}
 		return meta, nil
 	}
 

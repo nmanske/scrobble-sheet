@@ -153,6 +153,7 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 	if err != nil {
 		return Summary{}, err
 	}
+	s.seedStateFromTargetRows(&st, idx)
 	s.seedStateFromTargetRows(&st, singlesIdx)
 	s.seedStateFromTargetRows(&st, epIdx)
 
@@ -171,6 +172,10 @@ func (s *Service) runBackfill(ctx context.Context, opts model.RuntimeOptions) (S
 
 		if i > 0 && i%500 == 0 {
 			s.logger.Printf("backfill: checkpoint at %d / %d", i, len(scrobbles))
+			// Scrobbles are processed oldest-first, so the current timestamp is a
+			// valid resume point: an aborted backfill continues from here instead
+			// of silently collapsing back to the 24h sync window.
+			st.LastSuccessfulSyncUTC = time.Unix(scrobble.Timestamp, 0).UTC().Format(time.RFC3339)
 			if err := s.persist(ctx, idx, singlesIdx, epIdx, st, opts.DryRun || s.cfg.DryRun); err != nil {
 				return summary, err
 			}
@@ -378,17 +383,26 @@ func (s *Service) applyScrobble(ctx context.Context, summary *Summary, idx, sing
 
 	trackCount := highestTrackRank(meta)
 	activeIdx := idx
-	switch {
-	case row == nil && epIdx != nil && meta.ReleaseGroupType == "EP":
-		activeIdx = epIdx
-		if existing, _ := epIdx.lookup(canonicalKey, rawKey); existing != nil {
-			row = existing
+	if row == nil {
+		switch {
+		case epIdx != nil && meta.ReleaseGroupType == "EP":
+			activeIdx = epIdx
+		case singlesIdx != nil &&
+			(meta.ReleaseGroupType == "Single" || (meta.ReleaseGroupType == "" && trackCount == 1)):
+			activeIdx = singlesIdx
 		}
-	case row == nil && singlesIdx != nil &&
-		(meta.ReleaseGroupType == "Single" || (meta.ReleaseGroupType == "" && trackCount == 1)):
-		activeIdx = singlesIdx
-		if existing, _ := singlesIdx.lookup(canonicalKey, rawKey); existing != nil {
-			row = existing
+		// ReleaseGroupType and trackCount move around between runs whenever
+		// Last.fm or MusicBrainz answer differently, so a release already on one
+		// tab must be found there rather than re-created on whichever tab this
+		// run happens to pick.
+		for _, candidate := range []*sheetIndex{activeIdx, idx, singlesIdx, epIdx} {
+			if candidate == nil {
+				continue
+			}
+			if existing, _ := candidate.lookup(canonicalKey, rawKey); existing != nil {
+				row, activeIdx = existing, candidate
+				break
+			}
 		}
 	}
 

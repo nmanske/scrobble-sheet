@@ -101,7 +101,7 @@ func (c *Client) EnsureHeaderRow(ctx context.Context, sheetName string) error {
 	if err != nil {
 		return err
 	}
-	if len(rows) > 0 && len(rows[0]) >= 7 {
+	if len(rows) > 0 && len(rows[0]) >= 2 {
 		first := rows[0]
 		if strings.EqualFold(strings.TrimSpace(first[0]), model.DateHeader) && strings.EqualFold(strings.TrimSpace(first[1]), model.ArtistHeader) {
 			return nil
@@ -110,7 +110,7 @@ func (c *Client) EnsureHeaderRow(ctx context.Context, sheetName string) error {
 	update := batchUpdateRequest{
 		ValueInputOption: "USER_ENTERED",
 		Data: []batchUpdateValueSet{{
-			Range:  fmt.Sprintf("%s!A1:G1", quoteSheetName(sheetName)),
+			Range:  fmt.Sprintf("%s!A1:E1", quoteSheetName(sheetName)),
 			Values: [][]interface{}{model.Headers()},
 		}},
 	}
@@ -146,15 +146,30 @@ func (c *Client) BatchWriteRows(ctx context.Context, sheetName string, rows []*m
 	if len(rows) == 0 {
 		return nil
 	}
-	data := make([]batchUpdateValueSet, 0, len(rows))
+	// Artist/Album/Year/Notes are written RAW: USER_ENTERED makes Sheets
+	// re-interpret text like "9:25 PM" or "6:00 AM" as a time value, so the cell
+	// no longer reads back as the string that produced its dedup key and every
+	// run appends a fresh duplicate row. The date column still goes through
+	// USER_ENTERED so it stays a real date.
+	text := make([]batchUpdateValueSet, 0, len(rows))
+	dates := make([]batchUpdateValueSet, 0, len(rows))
 	for _, row := range rows {
-		data = append(data, batchUpdateValueSet{
-			Range:  fmt.Sprintf("%s!A%d:G%d", quoteSheetName(sheetName), row.RowNumber, row.RowNumber),
-			Values: [][]interface{}{row.ToValues()},
+		values := row.ToValues()
+		dates = append(dates, batchUpdateValueSet{
+			Range:  fmt.Sprintf("%s!A%d", quoteSheetName(sheetName), row.RowNumber),
+			Values: [][]interface{}{{values[0]}},
+		})
+		text = append(text, batchUpdateValueSet{
+			Range:  fmt.Sprintf("%s!B%d:E%d", quoteSheetName(sheetName), row.RowNumber, row.RowNumber),
+			Values: [][]interface{}{values[1:]},
 		})
 	}
-	body := batchUpdateRequest{ValueInputOption: "USER_ENTERED", Data: data}
-	_, err := c.doJSON(ctx, http.MethodPost, "/values:batchUpdate", body, nil)
+	if _, err := c.doJSON(ctx, http.MethodPost, "/values:batchUpdate",
+		batchUpdateRequest{ValueInputOption: "RAW", Data: text}, nil); err != nil {
+		return err
+	}
+	_, err := c.doJSON(ctx, http.MethodPost, "/values:batchUpdate",
+		batchUpdateRequest{ValueInputOption: "USER_ENTERED", Data: dates}, nil)
 	return err
 }
 
