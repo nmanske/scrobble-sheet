@@ -251,6 +251,8 @@ func (s *Service) runImportLegacy(ctx context.Context, opts model.RuntimeOptions
 }
 
 func (s *Service) prepareTargetSheet(ctx context.Context) error {
+	s.logger.Printf("spreadsheet %s: albums=%q singles=%q ep=%q",
+		s.cfg.GoogleSpreadsheetID, s.cfg.TargetSheetName, s.cfg.SinglesSheetName, s.cfg.EPSheetName)
 	if err := s.sheets.EnsureSheet(ctx, s.cfg.TargetSheetName); err != nil {
 		return fmt.Errorf("ensure target sheet: %w", err)
 	}
@@ -322,7 +324,7 @@ func (s *Service) loadSheetIndex(ctx context.Context, sheetName string) (*sheetI
 		current.Key = key
 		current.Existing = true
 		if _, exists := idx.rowsByKey[key]; exists {
-			s.logger.Printf("warning: duplicate key %q already exists in target sheet; leaving later row %d untouched", key, rowNumber)
+			s.logger.Printf("warning: duplicate key %q already exists in sheet %q; leaving later row %d untouched", key, sheetName, rowNumber)
 			continue
 		}
 		idx.addRow(current)
@@ -330,6 +332,8 @@ func (s *Service) loadSheetIndex(ctx context.Context, sheetName string) (*sheetI
 	if idx.nextRow < 2 {
 		idx.nextRow = 2
 	}
+	s.logger.Printf("sheet %q: read %d row(s), indexed %d release(s), next free row %d",
+		sheetName, len(rows), len(idx.rows), idx.nextRow)
 	return idx, nil
 }
 
